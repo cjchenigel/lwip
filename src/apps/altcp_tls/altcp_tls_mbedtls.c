@@ -386,7 +386,11 @@ altcp_mbedtls_handle_rx_appldata(struct altcp_pcb *conn, altcp_mbedtls_state_t *
   LWIP_ASSERT("state != NULL", state != NULL);
   if (!(state->flags & ALTCP_MBEDTLS_FLAGS_HANDSHAKE_DONE)) {
     /* handshake not done yet */
-    return ERR_VAL;
+    if (mbedtls_ssl_handshake(&state->ssl_context) == 0) {
+      state->flags |= ALTCP_MBEDTLS_FLAGS_HANDSHAKE_DONE;
+    } else {
+      return ERR_VAL;
+    }
   }
   do {
     /* allocate a full-sized unchained PBUF_POOL: this is for RX! */
@@ -1291,12 +1295,17 @@ altcp_mbedtls_bio_send(void *ctx, const unsigned char *dataptr, size_t size)
   LWIP_ASSERT("state != NULL", state != NULL);
 
   while (size_left) {
-    u16_t write_len = (u16_t)LWIP_MIN(size_left, 0xFFFF);
+    u16_t sndbuf = altcp_sndbuf(conn->inner_conn);
+    u16_t write_len = (u16_t)LWIP_MIN(size_left, sndbuf);
+    if (write_len == 0) {
+      return (written == 0) ? MBEDTLS_ERR_SSL_WANT_WRITE : written;
+    }
     err_t err = altcp_write(conn->inner_conn, (const void *)dataptr, write_len, apiflags);
     if (err == ERR_OK) {
       written += write_len;
       size_left -= write_len;
       state->overhead_bytes_adjust += write_len;
+      dataptr += write_len;
     } else if (err == ERR_MEM) {
       if (written) {
         return written;
